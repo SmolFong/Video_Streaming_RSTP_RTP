@@ -17,11 +17,31 @@ class RtpPacket:
 		#--------------
 		# Fill the header bytearray with RTP header fields
 		
-		# header[0] = ...
-		# ...
+		# Byte 0: V (2 bit) | P (1 bit) | X (1 bit) | CC (4 bit)
+		header[0] = (version << 6) | (padding << 5) | (extension << 4) | cc
+		
+		# Byte 1: M (1 bit) | PT (7 bit)
+		header[1] = (marker << 7) | pt
+		
+		# Byte 2-3: Sequence Number (16 bit)
+		header[2] = (seqnum >> 8) & 0xFF
+		header[3] = seqnum & 0xFF
+		
+		# Byte 4-7: Timestamp (32 bit)
+		header[4] = (timestamp >> 24) & 0xFF
+		header[5] = (timestamp >> 16) & 0xFF
+		header[6] = (timestamp >> 8) & 0xFF
+		header[7] = timestamp & 0xFF
+		
+		# Byte 8-11: SSRC (32 bit)
+		header[8] = (ssrc >> 24) & 0xFF
+		header[9] = (ssrc >> 16) & 0xFF
+		header[10] = (ssrc >> 8) & 0xFF
+		header[11] = ssrc & 0xFF
 		
 		# Get the payload from the argument
-		# self.payload = ...
+		self.header = header
+		self.payload = payload
 		
 	def decode(self, byteStream):
 		"""Decode the RTP packet."""
