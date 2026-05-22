@@ -74,6 +74,11 @@ class Client:
 		"""Teardown button handler."""
 		self.sendRtspRequest(self.TEARDOWN)		
 		self.master.destroy() # Close the gui window
+		# BỌC LẠI BẰNG TRY...EXCEPT ĐỂ TRÁNH LỖI FILE KHÔNG TỒN TẠI
+		try:
+			os.remove(CACHE_FILE_NAME + str(self.sessionId) + CACHE_FILE_EXT) # Delete the cache image from video
+		except OSError:
+			pass # Bỏ qua nếu file cache chưa từng được tạo ra
 		os.remove(CACHE_FILE_NAME + str(self.sessionId) + CACHE_FILE_EXT) # Delete the cache image from video
 
 	def pauseMovie(self):
