@@ -142,49 +142,44 @@ class Client:
 	
 	def sendRtspRequest(self, requestCode):
 		"""Send RTSP request to the server."""	
-		#-------------
-		# TO COMPLETE
-		#-------------
-		
 		# Setup request
 		if requestCode == self.SETUP and self.state == self.INIT:
 			threading.Thread(target=self.recvRtspReply).start()
 			self.rtspSeq += 1
-			request = f"SETUP {self.fileName} RTSP/1.0\r\n" \
-					  f"CSeq: {self.rtspSeq}\r\n" \
-					  f"Transport: RTP/UDP; client_port={self.rtpPort}\r\n\r\n"
+			# Chú ý: Đã thêm một dấu cách sau 'client_port=' và dùng \n thay cho \r\n
+			request = f"SETUP {self.fileName} RTSP/1.0\n" \
+					  f"CSeq: {self.rtspSeq}\n" \
+					  f"Transport: RTP/UDP; client_port= {self.rtpPort}\n"
 			self.requestSent = self.SETUP
 		
 		# Play request
 		elif requestCode == self.PLAY and self.state == self.READY:
 			self.rtspSeq += 1
-			request = f"PLAY {self.fileName} RTSP/1.0\r\n" \
-					  f"CSeq: {self.rtspSeq}\r\n" \
-					  f"Session: {self.sessionId}\r\n\r\n"
+			request = f"PLAY {self.fileName} RTSP/1.0\n" \
+					  f"CSeq: {self.rtspSeq}\n" \
+					  f"Session: {self.sessionId}\n"
 			self.requestSent = self.PLAY
 		
 		# Pause request
 		elif requestCode == self.PAUSE and self.state == self.PLAYING:
 			self.rtspSeq += 1
-			request = f"PAUSE {self.fileName} RTSP/1.0\r\n" \
-					  f"CSeq: {self.rtspSeq}\r\n" \
-					  f"Session: {self.sessionId}\r\n\r\n"
+			request = f"PAUSE {self.fileName} RTSP/1.0\n" \
+					  f"CSeq: {self.rtspSeq}\n" \
+					  f"Session: {self.sessionId}\n"
 			self.requestSent = self.PAUSE
 			
 		# Teardown request
 		elif requestCode == self.TEARDOWN and not self.state == self.INIT:
 			self.rtspSeq += 1
-			request = f"TEARDOWN {self.fileName} RTSP/1.0\r\n" \
-					  f"CSeq: {self.rtspSeq}\r\n" \
-					  f"Session: {self.sessionId}\r\n\r\n"
+			request = f"TEARDOWN {self.fileName} RTSP/1.0\n" \
+					  f"CSeq: {self.rtspSeq}\n" \
+					  f"Session: {self.sessionId}\n"
 			self.requestSent = self.TEARDOWN
 		else:
 			return
 		
 		# Send the RTSP request using rtspSocket.
 		self.rtspSocket.send(request.encode("utf-8"))
-		
-		print('\nData sent:\n' + request)
 		
 		print('\nData sent:\n' + request)
 	
