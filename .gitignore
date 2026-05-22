@@ -1,0 +1,12 @@
+# Bỏ qua môi trường ảo
+venv/
+
+# Bỏ qua các file cache và file biên dịch của Python
+__pycache__/
+*.py[cod]
+
+# Bỏ qua file rác hệ thống của macOS
+.DS_Store
+
+# Bỏ qua các file ảnh bộ đệm (cache) do Client sinh ra
+cache-*.jpg
