@@ -84,10 +84,13 @@ class Client:
 	def playMovie(self):
 		"""Play button handler."""
 		if self.state == self.READY:
-			# Create a new thread to listen for RTP packets
-			threading.Thread(target=self.listenRtp).start()
+			# SỬA LỖI RACE CONDITION: Phải reset event TRƯỚC KHI bật luồng mới
 			self.playEvent = threading.Event()
 			self.playEvent.clear()
+			
+			# Create a new thread to listen for RTP packets
+			threading.Thread(target=self.listenRtp).start()
+			
 			self.sendRtspRequest(self.PLAY)
 	
 	def listenRtp(self):		
@@ -107,13 +110,14 @@ class Client:
 						self.updateMovie(self.writeFrame(rtpPacket.getPayload()))
 			except:
 				# Stop listening upon requesting PAUSE or TEARDOWN
-				if self.playEvent.isSet(): 
+				# SỬA LỖI PYTHON 3.13: Dùng is_set() thay vì isSet()
+				if self.playEvent.is_set(): 
 					break
 				
 				# Upon receiving ACK for TEARDOWN request,
 				# close the RTP socket
 				if self.teardownAcked == 1:
-					self.rtpSocket.shutdown(socket.SHUT_RDWR)
+					# SỬA LỖI MAC OS: UDP không có connection, tuyệt đối không dùng shutdown()
 					self.rtpSocket.close()
 					break
 					
