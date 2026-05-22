@@ -24,17 +24,17 @@ class ServerWorker:
 	def __init__(self, clientInfo):
 		self.clientInfo = clientInfo
 		
-	def run(self):
-		threading.Thread(target=self.recvRtspRequest).start()
+	# def run(self):
+	# 	threading.Thread(target=self.recvRtspRequest).start()
 	
-	def recvRtspRequest(self):
-		"""Receive RTSP request from the client."""
-		connSocket = self.clientInfo['rtspSocket'][0]
-		while True:            
-			data = connSocket.recv(256)
-			if data:
-				print("Data received:\n" + data.decode("utf-8"))
-				self.processRtspRequest(data.decode("utf-8"))
+	# def recvRtspRequest(self):
+	# 	"""Receive RTSP request from the client."""
+	# 	connSocket = self.clientInfo['rtspSocket'][0]
+	# 	while True:            
+	# 		data = connSocket.recv(256)
+	# 		if data:
+	# 			print("Data received:\n" + data.decode("utf-8"))
+	# 			self.processRtspRequest(data.decode("utf-8"))
 	
 	def processRtspRequest(self, data):
 		"""Process RTSP request sent from the client."""
@@ -113,7 +113,8 @@ class ServerWorker:
 			self.clientInfo['event'].wait(0.05) 
 			
 			# Stop sending if request is PAUSE or TEARDOWN
-			if self.clientInfo['event'].isSet(): 
+			# SỬA LỖI TẠI ĐÂY: is_set() thay vì isSet()
+			if self.clientInfo['event'].is_set(): 
 				break 
 				
 			data = self.clientInfo['videoStream'].nextFrame()
