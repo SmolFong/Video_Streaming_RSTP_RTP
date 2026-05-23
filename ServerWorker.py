@@ -49,26 +49,27 @@ class ServerWorker:
 		# Get the RTSP sequence number 
 		seq = request[1].split(' ')
 		
-		# Process SETUP request
+		# Process SETUP request (with a new logic)
 		if requestType == self.SETUP:
 			if self.state == self.INIT:
-				# Update state
 				print("processing SETUP\n")
-				
 				try:
 					self.clientInfo['videoStream'] = VideoStream(filename)
 					self.state = self.READY
 				except IOError:
 					self.replyRtsp(self.FILE_NOT_FOUND_404, seq[1])
 				
-				# Generate a randomized RTSP session ID
 				self.clientInfo['session'] = randint(100000, 999999)
-				
-				# Send RTSP reply
 				self.replyRtsp(self.OK_200, seq[1])
 				
-				# Get the RTP/UDP port from the last line
+				# Đọc Port mạng
 				self.clientInfo['rtpPort'] = request[2].split(' ')[3]
+				
+				# KIỂM TRA XEM CLIENT MUỐN DÙNG TCP HAY UDP
+				if "RTP/TCP" in request[2]:
+					self.clientInfo['transport'] = 'TCP'
+				else:
+					self.clientInfo['transport'] = 'UDP'
 		
 		# Process PLAY request 		
 		elif requestType == self.PLAY:
@@ -76,12 +77,18 @@ class ServerWorker:
 				print("processing PLAY\n")
 				self.state = self.PLAYING
 				
-				# Create a new socket for RTP/UDP
-				self.clientInfo["rtpSocket"] = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+				# KHỞI TẠO SOCKET THEO GIAO THỨC ĐÃ CHỌN
+				if self.clientInfo['transport'] == 'TCP':
+					self.clientInfo["rtpSocket"] = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+					address = self.clientInfo['rtspSocket'][1][0]
+					port = int(self.clientInfo['rtpPort'])
+					# Server chủ động connect tới socket lắng nghe dữ liệu của Client
+					self.clientInfo["rtpSocket"].connect((address, port))
+				else:
+					self.clientInfo["rtpSocket"] = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 				
 				self.replyRtsp(self.OK_200, seq[1])
 				
-				# Create a new thread and start sending RTP packets
 				self.clientInfo['event'] = threading.Event()
 				self.clientInfo['worker']= threading.Thread(target=self.sendRtp) 
 				self.clientInfo['worker'].start()
@@ -108,12 +115,10 @@ class ServerWorker:
 			self.clientInfo['rtpSocket'].close()
 			
 	def sendRtp(self):
-		"""Send RTP packets over UDP."""
+		"""Send RTP packets over UDP (with fragmentation) or TCP."""
 		while True:
 			self.clientInfo['event'].wait(0.05) 
 			
-			# Stop sending if request is PAUSE or TEARDOWN
-			# SỬA LỖI TẠI ĐÂY: is_set() thay vì isSet()
 			if self.clientInfo['event'].is_set(): 
 				break 
 				
@@ -121,30 +126,44 @@ class ServerWorker:
 			if data: 
 				frameNumber = self.clientInfo['videoStream'].frameNbr()
 				try:
-					address = self.clientInfo['rtspSocket'][1][0]
-					port = int(self.clientInfo['rtpPort'])
-					self.clientInfo['rtpSocket'].sendto(self.makeRtp(data, frameNumber),(address,port))
+					if self.clientInfo['transport'] == 'TCP':
+						# GIAO THỨC TCP: Gửi nguyên gói lớn kèm 4-byte length prefix
+						packet = self.makeRtp(data, frameNumber, marker=1)
+						packet_len = len(packet)
+						self.clientInfo['rtpSocket'].sendall(packet_len.to_bytes(4, byteorder='big') + packet)
+					else:
+						# GIAO THỨC UDP: Thực hiện phân mảnh gói tin nếu kích thước > 1400 bytes
+						address = self.clientInfo['rtspSocket'][1][0]
+						port = int(self.clientInfo['rtpPort'])
+						payload_size = 1400
+						
+						if len(data) > payload_size:
+							for i in range(0, len(data), payload_size):
+								chunk = data[i:i+payload_size]
+								# Mảnh cuối cùng của khung hình sẽ mang bit marker = 1
+								marker = 1 if (i + payload_size >= len(data)) else 0
+								packet = self.makeRtp(chunk, frameNumber, marker=marker)
+								self.clientInfo['rtpSocket'].sendto(packet, (address, port))
+						else:
+							packet = self.makeRtp(data, frameNumber, marker=1)
+							self.clientInfo['rtpSocket'].sendto(packet, (address, port))
 				except:
-					print("Connection Error")
-					#print('-'*60)
-					#traceback.print_exc(file=sys.stdout)
-					#print('-'*60)
+					print("Connection Error or Client disconnected.")
+					break
 
-	def makeRtp(self, payload, frameNbr):
-		"""RTP-packetize the video data."""
+	def makeRtp(self, payload, frameNbr, marker=0):
+		"""RTP-packetize the video data using dynamic marker."""
 		version = 2
 		padding = 0
 		extension = 0
 		cc = 0
-		marker = 0
 		pt = 26 # MJPEG type
 		seqnum = frameNbr
 		ssrc = 0 
 		
 		rtpPacket = RtpPacket()
-		
+		# Sử dụng tham số biến marker truyền vào thay vì fix cứng bằng 0
 		rtpPacket.encode(version, padding, extension, cc, seqnum, marker, pt, ssrc, payload)
-		
 		return rtpPacket.getPacket()
 		
 	def replyRtsp(self, code, seq):
