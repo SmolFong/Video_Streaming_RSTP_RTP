@@ -131,20 +131,21 @@ class Client:
 			except socket.timeout:
 				print("[!] TCP Data connection timeout.")
 				return
-		
+		receivedBuffer = bytearray()
+		self.currentAssemblyFrame = -1
+
 		# Mảng lưu trữ tích lũy dữ liệu khi bị phân mảnh gói tin
 		receivedBuffer = bytearray()
 		
 		while True:
 			try:
 				if self.streamType == "TCP":
-					# Đọc tiền tố độ dài packet dài 4 byte
+					# --- LÀN TCP: XỬ LÝ GOM MẢNH CHÍNH XÁC ---
 					len_bytes = self.rtpSocket.recv(4)
 					if not len_bytes or len(len_bytes) < 4:
 						break
 					packet_len = int.from_bytes(len_bytes, byteorder='big')
 					
-					# Đọc chính xác độ dài byte dữ liệu của gói RTP đó
 					data = bytearray()
 					while len(data) < packet_len:
 						packet = self.rtpSocket.recv(packet_len - len(data))
@@ -152,43 +153,39 @@ class Client:
 							break
 						data.extend(packet)
 					
-					if len(data) < packet_len:
-						break
-				else:
-					# Đọc gói tin qua UDP như thông thường
-					data = self.rtpSocket.recv(20480)
-					
-				if data:
-					rtpPacket = RtpPacket()
-					rtpPacket.decode(data)
-					
-					# Tích lũy payload nhị phân của gói tin hiện tại vào bộ gom mảnh
-					receivedBuffer.extend(rtpPacket.getPayload())
-					
-					# Kiểm tra xem đây có phải là mảnh cuối cùng của Frame hình ảnh không
-					# KIỂM TRA FRAME MỚI: Nếu nhảy sang frame mới, xóa sạch rác của frame cũ
-					currFrameNbr = rtpPacket.seqNum()
-					if currFrameNbr > getattr(self, 'currentAssemblyFrame', -1):
-						self.currentAssemblyFrame = currFrameNbr
-						receivedBuffer = bytearray() # Xóa rác
-					
-					# Chỉ tích lũy payload nếu nó thuộc về frame đang lắp ráp
-					if currFrameNbr == getattr(self, 'currentAssemblyFrame', -1):
-						receivedBuffer.extend(rtpPacket.getPayload())
-					
-					# Nếu đây là mảnh cuối cùng có marker
-					if rtpPacket.marker() == 1:
+					if data:
+						rtpPacket = RtpPacket()
+						rtpPacket.decode(data)
+						currFrameNbr = rtpPacket.seqNum()
 						if currFrameNbr > self.frameNbr:
 							self.frameNbr = currFrameNbr
-							
-							# BỌC LẠI BẰNG TRY-EXCEPT: Chống sập luồng khi ảnh bị lỗi do mất gói UDP
-							try:
-								self.updateMovie(self.writeFrame(bytes(receivedBuffer)))
-							except Exception as e:
-								print(f"[!] Bỏ qua khung hình {currFrameNbr} do mất gói tin UDP (Corrupted JPEG).")
-								
-						# Reset lại đệm để đón Frame tiếp theo
-						receivedBuffer = bytearray()
+							self.updateMovie(self.writeFrame(rtpPacket.getPayload()))
+				else:
+					# --- LÀN UDP: GOM MẢNH AN TOÀN ---
+					data = self.rtpSocket.recv(20480)
+					if data:
+						rtpPacket = RtpPacket()
+						rtpPacket.decode(data)
+						currFrameNbr = rtpPacket.seqNum()
+						
+						# Khung hình mới tới -> Dọn sạch rác của khung cũ
+						if currFrameNbr > self.currentAssemblyFrame:
+							self.currentAssemblyFrame = currFrameNbr
+							receivedBuffer = bytearray()
+						
+						# Tích lũy mảnh
+						if currFrameNbr == self.currentAssemblyFrame:
+							receivedBuffer.extend(rtpPacket.getPayload())
+						
+						# Nếu đủ mảnh (có cờ chốt)
+						if rtpPacket.marker() == 1:
+							if currFrameNbr > self.frameNbr:
+								self.frameNbr = currFrameNbr
+								try:
+									self.updateMovie(self.writeFrame(bytes(receivedBuffer)))
+								except Exception:
+									pass # Lỡ có rơi 1 gói thì bỏ qua frame đó, không báo lỗi
+							receivedBuffer = bytearray()
 			except:
 				if self.playEvent.is_set(): 
 					break
@@ -315,6 +312,8 @@ class Client:
 		"""Open RTP socket binded to a specified port based on protocol type."""
 		if self.streamType == "UDP":
 			self.rtpSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+			# Nới rộng bộ đệm OS lên 1MB để chống rớt gói khi Server bắn nhanh
+			self.rtpSocket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 1024)
 			self.rtpSocket.settimeout(0.5)
 			try:
 				self.rtpSocket.bind(('', self.rtpPort))

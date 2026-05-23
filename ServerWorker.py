@@ -1,3 +1,4 @@
+import time
 from random import randint
 import sys, traceback, threading, socket
 
@@ -114,42 +115,53 @@ class ServerWorker:
 			# Close the RTP socket
 			self.clientInfo['rtpSocket'].close()
 			
+	import time # Nhớ thêm dòng này ở đầu file nếu chưa có
+
+# ... (bên trong class ServerWorker) ...
+
 	def sendRtp(self):
-		"""Send RTP packets over UDP (with fragmentation) or TCP."""
+		"""Send RTP packets with Fragmentation, Pacing, and EOF handling."""
 		while True:
 			self.clientInfo['event'].wait(0.05) 
-			
 			if self.clientInfo['event'].is_set(): 
 				break 
 				
 			data = self.clientInfo['videoStream'].nextFrame()
-			if data: 
-				frameNumber = self.clientInfo['videoStream'].frameNbr()
-				try:
-					if self.clientInfo['transport'] == 'TCP':
-						# GIAO THỨC TCP: Gửi nguyên gói lớn kèm 4-byte length prefix
-						packet = self.makeRtp(data, frameNumber, marker=1)
-						packet_len = len(packet)
-						self.clientInfo['rtpSocket'].sendall(packet_len.to_bytes(4, byteorder='big') + packet)
-					else:
-						# GIAO THỨC UDP: Thực hiện phân mảnh gói tin nếu kích thước > 1400 bytes
-						address = self.clientInfo['rtspSocket'][1][0]
-						port = int(self.clientInfo['rtpPort'])
-						payload_size = 1400
-						
-						if len(data) > payload_size:
-							for i in range(0, len(data), payload_size):
-								chunk = data[i:i+payload_size]
-								# Mảnh cuối cùng của khung hình sẽ mang bit marker = 1
-								marker = 1 if (i + payload_size >= len(data)) else 0
-								packet = self.makeRtp(chunk, frameNumber, marker=marker)
-								self.clientInfo['rtpSocket'].sendto(packet, (address, port))
-						else:
-							packet = self.makeRtp(data, frameNumber, marker=1)
+			
+			# NẾU NHẬN NONE -> ĐÃ HẾT VIDEO HOẶC FRAME LỖI
+			if not data:
+				print("[*] End of Video Stream reached. Stopping RTP transmission.")
+				break # Phá vỡ vòng lặp, dừng gửi một cách êm ái
+				
+			frameNumber = self.clientInfo['videoStream'].frameNbr()
+			try:
+				if self.clientInfo['transport'] == 'TCP':
+					# TCP không lo giới hạn kích thước, gửi cục lớn
+					packet = self.makeRtp(data, frameNumber, marker=1)
+					packet_len = len(packet)
+					self.clientInfo['rtpSocket'].sendall(packet_len.to_bytes(4, byteorder='big') + packet)
+				else:
+					# UDP PHÂN MẢNH + ĐIỀU TỐC CHỐNG NGẬP LỤT
+					address = self.clientInfo['rtspSocket'][1][0]
+					port = int(self.clientInfo['rtpPort'])
+					payload_size = 1400 # MTU an toàn
+					
+					if len(data) > payload_size:
+						for i in range(0, len(data), payload_size):
+							chunk = data[i:i+payload_size]
+							marker = 1 if (i + payload_size >= len(data)) else 0
+							packet = self.makeRtp(chunk, frameNumber, marker=marker)
 							self.clientInfo['rtpSocket'].sendto(packet, (address, port))
-				except:
-					print("Connection Error or Client disconnected.")
-					break
+							
+							# Micro-delay: Ngủ 0.5 mili-giây để OS Client kịp hứng, chống nhiễu ảnh
+							time.sleep(0.0005) 
+					else:
+						packet = self.makeRtp(data, frameNumber, marker=1)
+						self.clientInfo['rtpSocket'].sendto(packet, (address, port))
+			except Exception as e:
+				# In ra lỗi thật sự thay vì đoán mù
+				print(f"[!] Streaming aborted. Details: {e}")
+				break
 
 	def makeRtp(self, payload, frameNbr, marker=0):
 		"""RTP-packetize the video data using dynamic marker."""
