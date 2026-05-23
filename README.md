@@ -82,3 +82,30 @@
 #### 3. Repository Governance & Source Optimization
 * **Vulnerability & Junk Filtering:** Formulated a local `.gitignore` manifest to permanently block the tracking of virtual environments (`venv/`), Python bytecode caches (`__pycache__/`), OS system artifacts (`.DS_Store`), and transient runtime JPEG image buffers (`cache-*.jpg`).
 * **Index Refactoring:** Cleared out historic garbage tracking data by forcing a index-level purge using `git rm -r --cached .`, resulting in a lightweight, pure source code repository on GitHub.
+
+---
+
+## Phase 5 Summary: Media Fragmentation, Pacing & Dual TCP/UDP Streaming
+
+### Core Implementation
+- **Marker Bit Decoding:** Added a `marker()` method to `RtpPacket.py` to extract the end-of-frame indicator (bit 7 of byte 1) from the incoming RTP header.
+- **Adaptive Transport Protocol Layer:** Upgraded `ServerWorker.py` to parse dynamic protocol selections (`RTP/UDP` vs `RTP/TCP`). Established a 4-byte big-endian length-prefixed stream framework for connection-oriented TCP transmission.
+- **Client UI & Reassembly Engine:** Integrated resolution/protocol radio toggles (SD/UDP vs HD/TCP) into `Client.py`. Re-architected the `listenRtp` thread to accumulate multi-packet binary fragments into a sequential `bytearray` buffer, flushing it to the display engine only upon encountering `marker == 1`.
+- **Stream Termination & EOF Safeguards:** Modified the media delivery loop to detect null pointer returns from the video parser gracefully, shutting down threads cleanly rather than freezing or spinning resources.
+
+### Encountered Anomalies & Engineering Resolutions
+
+#### A. High-Frequency UDP Packet Loss & Frame Corruption
+- **Symptom:** Naive UDP fragmentation caused severe screen tearing, multicolored noise artifacts, or immediate thread lockups.
+- **Root Cause:** Slicing large frames into chunks and blasting them consecutively overwhelmed the client OS network stack. Out-of-order delivery and dropped fragments corrupted the JPEG binary structure, causing Pillow to crash.
+- **Resolution:** Implemented **Pacing** on the server by introducing a micro-delay (`time.sleep(0.0005)`) between fragment transmissions. Concurrently expanded the client's OS socket receive space (`socket.SO_RCVBUF`) to 1MB to prevent buffer overflow.
+
+#### B. OS-Level MTU Limit Violations (Message Too Long)
+- **Symptom:** Pushing large unfragmented HD frames over UDP threw sudden connection errors or socket exceptions on macOS.
+- **Root Cause:** The macOS network kernel strictly blocks individual UDP datagram payloads that exceed the Maximum Transmission Unit (MTU) limit, triggering an instantaneous system fault.
+- **Resolution:** Re-established strict 1400-byte chunk segmentation for the UDP lane while keeping the raw byte-stream approach for the TCP lane.
+
+#### C. Fixed 5-Byte Header Parsing Overflow
+- **Symptom:** The stream permanently froze at an identical time stamp across both UDP and TCP networks.
+- **Root Cause:** `VideoStream.py` relied on a naive `read(5)` protocol. High-definition frames occasionally generated data payloads requiring 6 characters for length definition (e.g., $\ge$ 100,000 bytes). This caused the parser to ingest part of the frame length into the binary payload, misaligning the file offset and throwing an unhandled `ValueError`.
+- **Resolution:** Patched `VideoStream.py` with a robust `try...except ValueError` block, translating parsing failures into an authentic, safe stream termination signal.
