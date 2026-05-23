@@ -83,6 +83,8 @@
 * **Vulnerability & Junk Filtering:** Formulated a local `.gitignore` manifest to permanently block the tracking of virtual environments (`venv/`), Python bytecode caches (`__pycache__/`), OS system artifacts (`.DS_Store`), and transient runtime JPEG image buffers (`cache-*.jpg`).
 * **Index Refactoring:** Cleared out historic garbage tracking data by forcing a index-level purge using `git rm -r --cached .`, resulting in a lightweight, pure source code repository on GitHub.
 
+---
+
 ## Phase 5 Summary: Media Fragmentation, Pacing & Dual TCP/UDP Streaming
 
 ### Core Implementation
