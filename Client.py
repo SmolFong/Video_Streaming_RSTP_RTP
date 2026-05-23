@@ -96,11 +96,12 @@ class Client:
 		"""Teardown button handler."""
 		self.sendRtspRequest(self.TEARDOWN)		
 		self.master.destroy() # Close the gui window
-		# BỌC LẠI BẰNG TRY...EXCEPT ĐỂ TRÁNH LỖI FILE KHÔNG TỒN TẠI
+		
+		# Khôi phục bảo vệ tránh lỗi FileNotFoundError
 		try:
-			os.remove(CACHE_FILE_NAME + str(self.sessionId) + CACHE_FILE_EXT) # Delete the cache image from video
+			os.remove(CACHE_FILE_NAME + str(self.sessionId) + CACHE_FILE_EXT)
 		except OSError:
-			pass # Bỏ qua nếu file cache chưa từng được tạo ra
+			pass
 		os.remove(CACHE_FILE_NAME + str(self.sessionId) + CACHE_FILE_EXT) # Delete the cache image from video
 
 	def pauseMovie(self):
@@ -165,15 +166,28 @@ class Client:
 					receivedBuffer.extend(rtpPacket.getPayload())
 					
 					# Kiểm tra xem đây có phải là mảnh cuối cùng của Frame hình ảnh không
+					# KIỂM TRA FRAME MỚI: Nếu nhảy sang frame mới, xóa sạch rác của frame cũ
+					currFrameNbr = rtpPacket.seqNum()
+					if currFrameNbr > getattr(self, 'currentAssemblyFrame', -1):
+						self.currentAssemblyFrame = currFrameNbr
+						receivedBuffer = bytearray() # Xóa rác
+					
+					# Chỉ tích lũy payload nếu nó thuộc về frame đang lắp ráp
+					if currFrameNbr == getattr(self, 'currentAssemblyFrame', -1):
+						receivedBuffer.extend(rtpPacket.getPayload())
+					
+					# Nếu đây là mảnh cuối cùng có marker
 					if rtpPacket.marker() == 1:
-						currFrameNbr = rtpPacket.seqNum()
-						
-						if currFrameNbr > self.frameNbr: # Loại bỏ gói tin đến muộn
+						if currFrameNbr > self.frameNbr:
 							self.frameNbr = currFrameNbr
-							# Ép kiểu gom mảnh sang bytes và ghi ra file ảnh hiển thị lên UI
-							self.updateMovie(self.writeFrame(bytes(receivedBuffer)))
-						
-						# Xóa sạch bộ đệm tích lũy để chuẩn bị đón Frame kế tiếp
+							
+							# BỌC LẠI BẰNG TRY-EXCEPT: Chống sập luồng khi ảnh bị lỗi do mất gói UDP
+							try:
+								self.updateMovie(self.writeFrame(bytes(receivedBuffer)))
+							except Exception as e:
+								print(f"[!] Bỏ qua khung hình {currFrameNbr} do mất gói tin UDP (Corrupted JPEG).")
+								
+						# Reset lại đệm để đón Frame tiếp theo
 						receivedBuffer = bytearray()
 			except:
 				if self.playEvent.is_set(): 
