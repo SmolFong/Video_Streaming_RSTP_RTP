@@ -67,6 +67,11 @@ class RtpPacket:
 		pt = self.header[1] & 127
 		return int(pt)
 	
+	# Hàm giải mã bit Marker
+	def marker(self):
+		"""Return marker bit (bit số 7 của byte 1)."""
+		return int((self.header[1] >> 7) & 1)
+	
 	def getPayload(self):
 		"""Return payload."""
 		return self.payload

@@ -64,6 +64,28 @@ class Client:
 		# Create a label to display the movie
 		self.label = Label(self.master, height=19)
 		self.label.grid(row=0, column=0, columnspan=4, sticky=W+E+N+S, padx=5, pady=5) 
+		# Thêm giao diện chọn độ phân giải / giao thức mạng
+		self.resolution = StringVar()
+		self.resolution.set("SD") # Mặc định chọn SD
+		
+		self.sd_btn = Radiobutton(self.master, text="SD-540 (UDP)", variable=self.resolution, value="SD", command=self.changeResolution)
+		self.sd_btn.grid(row=2, column=0, padx=2, pady=2)
+		
+		self.hd720_btn = Radiobutton(self.master, text="HD-720 (TCP)", variable=self.resolution, value="HD720", command=self.changeResolution)
+		self.hd720_btn.grid(row=2, column=1, padx=2, pady=2)
+		
+		self.hd1080_btn = Radiobutton(self.master, text="HD-1080 (TCP)", variable=self.resolution, value="HD1080", command=self.changeResolution)
+		self.hd1080_btn.grid(row=2, column=2, padx=2, pady=2)
+		
+		# Khởi tạo biến lưu cấu hình giao thức truyền dữ liệu media
+		self.streamType = "UDP"
+
+	def changeResolution(self):
+		if self.resolution.get() == "SD":
+			self.streamType = "UDP"
+		else:
+			self.streamType = "TCP"
+		print(f"[*] Switched streaming protocol to {self.streamType}")
 	
 	def setupMovie(self):
 		"""Setup button handler."""
@@ -74,11 +96,12 @@ class Client:
 		"""Teardown button handler."""
 		self.sendRtspRequest(self.TEARDOWN)		
 		self.master.destroy() # Close the gui window
-		# BỌC LẠI BẰNG TRY...EXCEPT ĐỂ TRÁNH LỖI FILE KHÔNG TỒN TẠI
+		
+		# Khôi phục bảo vệ tránh lỗi FileNotFoundError
 		try:
-			os.remove(CACHE_FILE_NAME + str(self.sessionId) + CACHE_FILE_EXT) # Delete the cache image from video
+			os.remove(CACHE_FILE_NAME + str(self.sessionId) + CACHE_FILE_EXT)
 		except OSError:
-			pass # Bỏ qua nếu file cache chưa từng được tạo ra
+			pass
 		os.remove(CACHE_FILE_NAME + str(self.sessionId) + CACHE_FILE_EXT) # Delete the cache image from video
 
 	def pauseMovie(self):
@@ -99,30 +122,78 @@ class Client:
 			self.sendRtspRequest(self.PLAY)
 	
 	def listenRtp(self):		
-		"""Listen for RTP packets."""
+		"""Listen for RTP packets and handle fragmentation or TCP byte-stream."""
+		if self.streamType == "TCP":
+			try:
+				# Chấp nhận kết nối kênh truyền dữ liệu từ Server gửi tới
+				self.rtpSocket, _ = self.rtpListenSocket.accept()
+				self.rtpSocket.settimeout(0.5)
+			except socket.timeout:
+				print("[!] TCP Data connection timeout.")
+				return
+		receivedBuffer = bytearray()
+		self.currentAssemblyFrame = -1
+
+		# Mảng lưu trữ tích lũy dữ liệu khi bị phân mảnh gói tin
+		receivedBuffer = bytearray()
+		
 		while True:
 			try:
-				data = self.rtpSocket.recv(20480)
-				if data:
-					rtpPacket = RtpPacket()
-					rtpPacket.decode(data)
+				if self.streamType == "TCP":
+					# --- LÀN TCP: XỬ LÝ GOM MẢNH CHÍNH XÁC ---
+					len_bytes = self.rtpSocket.recv(4)
+					if not len_bytes or len(len_bytes) < 4:
+						break
+					packet_len = int.from_bytes(len_bytes, byteorder='big')
 					
-					currFrameNbr = rtpPacket.seqNum()
-					print("Current Seq Num: " + str(currFrameNbr))
-										
-					if currFrameNbr > self.frameNbr: # Discard the late packet
-						self.frameNbr = currFrameNbr
-						self.updateMovie(self.writeFrame(rtpPacket.getPayload()))
+					data = bytearray()
+					while len(data) < packet_len:
+						packet = self.rtpSocket.recv(packet_len - len(data))
+						if not packet:
+							break
+						data.extend(packet)
+					
+					if data:
+						rtpPacket = RtpPacket()
+						rtpPacket.decode(data)
+						currFrameNbr = rtpPacket.seqNum()
+						if currFrameNbr > self.frameNbr:
+							self.frameNbr = currFrameNbr
+							self.updateMovie(self.writeFrame(rtpPacket.getPayload()))
+				else:
+					# --- LÀN UDP: GOM MẢNH AN TOÀN ---
+					data = self.rtpSocket.recv(20480)
+					if data:
+						rtpPacket = RtpPacket()
+						rtpPacket.decode(data)
+						currFrameNbr = rtpPacket.seqNum()
+						
+						# Khung hình mới tới -> Dọn sạch rác của khung cũ
+						if currFrameNbr > self.currentAssemblyFrame:
+							self.currentAssemblyFrame = currFrameNbr
+							receivedBuffer = bytearray()
+						
+						# Tích lũy mảnh
+						if currFrameNbr == self.currentAssemblyFrame:
+							receivedBuffer.extend(rtpPacket.getPayload())
+						
+						# Nếu đủ mảnh (có cờ chốt)
+						if rtpPacket.marker() == 1:
+							if currFrameNbr > self.frameNbr:
+								self.frameNbr = currFrameNbr
+								try:
+									self.updateMovie(self.writeFrame(bytes(receivedBuffer)))
+								except Exception:
+									pass # Lỡ có rơi 1 gói thì bỏ qua frame đó, không báo lỗi
+							receivedBuffer = bytearray()
 			except:
-				# Stop listening upon requesting PAUSE or TEARDOWN
-				# SỬA LỖI PYTHON 3.13: Dùng is_set() thay vì isSet()
 				if self.playEvent.is_set(): 
 					break
-				
-				# Upon receiving ACK for TEARDOWN request,
-				# close the RTP socket
 				if self.teardownAcked == 1:
-					# SỬA LỖI MAC OS: UDP không có connection, tuyệt đối không dùng shutdown()
+					if self.streamType == "TCP":
+						try:
+							self.rtpListenSocket.close()
+						except: pass
 					self.rtpSocket.close()
 					break
 					
@@ -156,9 +227,10 @@ class Client:
 			threading.Thread(target=self.recvRtspReply).start()
 			self.rtspSeq += 1
 			# Chú ý: Đã thêm một dấu cách sau 'client_port=' và dùng \n thay cho \r\n
+			# Chèn biến động self.streamType vào chuỗi yêu cầu Transport
 			request = f"SETUP {self.fileName} RTSP/1.0\n" \
 					  f"CSeq: {self.rtspSeq}\n" \
-					  f"Transport: RTP/UDP; client_port= {self.rtpPort}\n"
+					  f"Transport: RTP/{self.streamType}; client_port= {self.rtpPort}\n"
 			self.requestSent = self.SETUP
 		
 		# Play request
@@ -237,18 +309,27 @@ class Client:
 						self.teardownAcked = 1
 	
 	def openRtpPort(self):
-		"""Open RTP socket binded to a specified port."""
-		# Create a new datagram socket to receive RTP packets from the server
-		self.rtpSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) # SOCK_DGRAM = UDP
-		
-		# Set the timeout value of the socket to 0.5sec
-		self.rtpSocket.settimeout(0.5)
-		
-		try:
-			# Bind the socket to the address using the RTP port given by the client user
-			self.rtpSocket.bind(('', self.rtpPort)) # Lắng nghe trên mọi IP tại port rtpPort
-		except:
-			tkinter.messagebox.showwarning('Unable to Bind', 'Unable to bind PORT=%d' %self.rtpPort)
+		"""Open RTP socket binded to a specified port based on protocol type."""
+		if self.streamType == "UDP":
+			self.rtpSocket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+			# Nới rộng bộ đệm OS lên 1MB để chống rớt gói khi Server bắn nhanh
+			self.rtpSocket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 1024)
+			self.rtpSocket.settimeout(0.5)
+			try:
+				self.rtpSocket.bind(('', self.rtpPort))
+			except:
+				tkinter.messagebox.showwarning('Unable to Bind', 'Unable to bind PORT=%d' %self.rtpPort)
+		else:
+			# Với chế độ TCP HD: Khởi tạo một socket Server để lắng nghe kết nối từ Server đổ về
+			self.rtpListenSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+			self.rtpListenSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+			try:
+				self.rtpListenSocket.bind(('', self.rtpPort))
+				self.rtpListenSocket.listen(1)
+				self.rtpListenSocket.settimeout(0.5)
+			except:
+				tkinter.messagebox.showwarning('Unable to Bind', 'Unable to bind TCP PORT=%d' %self.rtpPort)
+
 	def handler(self):
 		"""Handler on explicitly closing the GUI window."""
 		self.pauseMovie()
