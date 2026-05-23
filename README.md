@@ -26,7 +26,7 @@
 
 ---
 
-### Phase 3: Basic UDP Media Streaming & Compatibility Hotfixes
+### Phase 3: Basic UDP Media Streaming & Compatibility Hotfixes:
 
 #### 1. Core Objectives Achieved
 * **Baseline Streaming Implementation:** Successfully established streaming of MJPEG video payloads (`movie.Mjpeg`) over the UDP transport protocol (`socket.SOCK_DGRAM`) inside a sandboxed Python virtual environment (`venv`).
@@ -56,7 +56,7 @@
 
 ---
 
-### Phase 4: Server Architecture Refactoring via I/O Multiplexing
+### Phase 4: Server Architecture Refactoring via I/O Multiplexing: 
 
 #### 1. Core Objectives Achieved
 * **Event-Driven Architecture Evolution:** Migrated the server's network core away from a heavy thread-per-client paradigm into a single-threaded, high-efficiency, event-driven network engine using the native `select` module.
