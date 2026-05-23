@@ -8,6 +8,8 @@
 - Byte 4-7: Timestamp (32 bit)
 - Byte 8-11: SSRC (32 bit)
 
+---
+
 ## Phase 2: Working on Client.py:
 
 ### Core Implementation
@@ -21,6 +23,8 @@
 - **PLAY:** Sent in `READY`. Includes the `Session` ID and triggers the `listenRtp` thread. Transitions to `PLAYING` upon `200 OK`.
 - **PAUSE:** Sent in `PLAYING`. Stops the media rendering loop. Transitions back to `READY` upon `200 OK`.
 - **TEARDOWN:** Sent to terminate the session. Closes active sockets and cleans up cache files. Resets to `INIT` upon `200 OK`.
+
+---
 
 ### Phase 3: Basic UDP Media Streaming & Compatibility Hotfixes
 
