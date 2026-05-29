@@ -119,15 +119,13 @@ class Client:
 		if self.state == self.READY:
 			self.playEvent = threading.Event()
 			self.playEvent.clear()
-			
 			# -- BẮT ĐẦU ĐOẠN KHỞI TẠO METRICS --
-			self.statStartTime = time.time()  # Thời điểm bắt đầu stream
-			self.statTotalBytes = 0           # Tổng byte nhận được
-			self.statTotalPackets = 0         # Tổng số gói tin đã nhận
-			self.statFirstSeq = -1            # Số Seq của khung hình đầu tiên
-			self.statLastSeq = 0              # Số Seq của khung hình gần nhất
+			self.statStartTime = time.time()
+			self.statTotalBytes = 0
+			self.statTotalPackets = 0
+			self.statFirstSeq = -1
+			self.statLastSeq = 0            
 			# -- KẾT THÚC ĐOẠN KHỞI TẠO --
-
 			threading.Thread(target=self.listenRtp).start()
 			self.sendRtspRequest(self.PLAY)
 	
@@ -203,6 +201,30 @@ class Client:
 						rtpPacket = RtpPacket()
 						rtpPacket.decode(data)
 						currFrameNbr = rtpPacket.seqNum()
+						# --- BẮT ĐẦU ĐO LƯỜNG (PHIÊN BẢN AN TOÀN ĐA LUỒNG) ---
+					# Khắc phục lỗi biến chưa kịp khởi tạo bằng getattr
+					if getattr(self, 'statFirstSeq', -1) == -1:
+						self.statFirstSeq = currFrameNbr
+					self.statLastSeq = currFrameNbr
+					self.statTotalBytes += len(rtpPacket.getPayload())
+					self.statTotalPackets += 1
+					
+					elapsed_time = time.time() - getattr(self, 'statStartTime', time.time())
+					# Chỉ cập nhật sau mỗi 0.2 giây để tránh làm quá tải giao diện UI
+					if elapsed_time > 0.2:
+						data_rate = int(self.statTotalBytes / elapsed_time)
+						
+						expected_packets = self.statLastSeq - self.statFirstSeq + 1
+						if expected_packets > 0:
+							loss_rate = max(0.0, 100 * (1 - (self.statTotalPackets / expected_packets)))
+						else:
+							loss_rate = 0.0
+							
+						stats_text = f"Protocol: {self.streamType} | Data Rate: {data_rate} bytes/s | Packet Loss: {loss_rate:.2f}%"
+						
+						# THỦ THUẬT QUAN TRỌNG: Dùng lambda và after() để đẩy việc vẽ UI về luồng chính
+						self.master.after(0, lambda t=stats_text: self.statLabel.config(text=t))
+					# --- KẾT THÚC ĐO LƯỜNG ---
 						
 						# Khung hình mới tới -> Dọn sạch rác của khung cũ
 						if currFrameNbr > self.currentAssemblyFrame:
