@@ -109,3 +109,31 @@
 - **Symptom:** The stream permanently froze at an identical time stamp across both UDP and TCP networks.
 - **Root Cause:** `VideoStream.py` relied on a naive `read(5)` protocol. High-definition frames occasionally generated data payloads requiring 6 characters for length definition (e.g., $\ge$ 100,000 bytes). This caused the parser to ingest part of the frame length into the binary payload, misaligning the file offset and throwing an unhandled `ValueError`.
 - **Resolution:** Patched `VideoStream.py` with a robust `try...except ValueError` block, translating parsing failures into an authentic, safe stream termination signal.
+
+---
+
+## Phase 6 Summary: Telemetry, Real-Time Observability & Dashboard Optimization
+
+### Core Implementation
+- **Real-Time Telemetry Dashboard:** Appended a dedicated tracking layer (`statLabel`) onto the bottom of the Client GUI to display live network metrics, implementing modern observability principles.
+- **Instantaneous Bounded Windowing (Data Rate):** Advanced the tracking architecture from a cumulative average calculation to a rolling **Time Window (0.5-second interval)** mechanism. This captures rapid fluctuations in throughput rather than smoothing them out over time.
+- **Dynamic Metric Scaling (MB/s):** Refactored raw byte counters into Megabytes per second (`MB/s`) using binary scaling factor relations ($1 \text{ MB} = 1024 \times 1024 \text{ bytes}$). This heavily cleans up the UI footprint and matches commercial media player standards.
+- **Packet Loss Accumulator:** Engineered a background packet-loss tracking logic using expected sequence number steps against the total packet ingestion count:
+  $$\text{Loss Rate (\%)} = 100 \times \left(1 - \frac{\text{Actual Packets Received}}{\text{Last Sequence} - \text{First Sequence} + 1}\right)$$
+
+### Encountered Anomalies & Engineering Resolutions
+
+#### A. Graphical Thread-Safety Collisions on macOS
+- **Symptom:** The metrics display froze indefinitely on the initial `"Waiting for stream..."` string placeholder, despite the media streaming smoothly in the background.
+- **Root Cause:** Tkinter UI bindings are fundamentally single-threaded. When the background streaming worker thread (`listenRtp`) attempted to directly manipulate the `Label` text property, the macOS graphical kernel silently rejected the unauthorized cross-thread operation.
+- **Resolution:** Implemented an asynchronous callback delegation loop using `self.master.after(0, ...)`. This pushes all visual updates back into the main UI execution event loop, resolving thread-safety deadlocks.
+
+#### B. Asynchronous Teardown Faults (Socket Not Connected)
+- **Symptom:** Executing a `TEARDOWN` command occasionally threw a critical `OSError: [Errno 57] Socket is not connected` stack dump.
+- **Root Cause:** If network jitter or early disconnects occurred under heavy packet rates, the client attempted to invoke `.shutdown(socket.SHUT_RDWR)` on an RTSP socket that the operating system kernel had already closed or un-bound.
+- **Resolution:** Encapsulated the network socket teardown routine inside tight `try...except OSError:` wrappers. Coupled it with a `finally:` block ensuring that `.close()` fires regardless of intermediate state transitions.
+
+#### C. State Alignment Synchronization Deadlocks
+- **Symptom:** After integrating the windowed telemetry modules, the video playback loop refused to load frames, and subsequent window closing attempts caused the interface thread to lock up.
+- **Root Cause:** During code merging, a critical section of the initialization logic inside `playMovie()` was inadvertently stripped out, leaving telemetry variables unallocated. Furthermore, the rendering calls (`self.updateMovie()`) were accidentally excluded during metric loop insertion, breaking the media path.
+- **Resolution:** Re-aligned the state initialization blocks, guaranteeing that all telemetry fields (`statWindowBytes`, `statWindowStartTime`) cleanly reset upon every fresh `PLAY` invocation, and restored the sequential image rendering pipeline within the main network worker loop.
