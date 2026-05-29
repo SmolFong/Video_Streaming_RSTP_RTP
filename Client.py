@@ -102,12 +102,12 @@ class Client:
 		self.sendRtspRequest(self.TEARDOWN)		
 		self.master.destroy() # Close the gui window
 		
-		# Khôi phục bảo vệ tránh lỗi FileNotFoundError
+		# Bọc try-except để không bị văng lỗi nếu chưa có file video
 		try:
 			os.remove(CACHE_FILE_NAME + str(self.sessionId) + CACHE_FILE_EXT)
 		except OSError:
 			pass
-		os.remove(CACHE_FILE_NAME + str(self.sessionId) + CACHE_FILE_EXT) # Delete the cache image from video
+
 
 	def pauseMovie(self):
 		"""Pause button handler."""
@@ -120,15 +120,21 @@ class Client:
 			self.playEvent = threading.Event()
 			self.playEvent.clear()
 			# -- BẮT ĐẦU ĐOẠN KHỞI TẠO METRICS --
-			self.statStartTime = time.time()
-			self.statTotalBytes = 0
-			self.statTotalPackets = 0
-			self.statFirstSeq = -1
-			self.statLastSeq = 0            
+			self.statStartTime = time.time()  
+			self.statTotalBytes = 0           
+			self.statTotalPackets = 0         
+			self.statFirstSeq = -1            
+			self.statLastSeq = 0              
+			
+			# THÊM 2 BIẾN NÀY CHO TỐC ĐỘ TỨC THỜI
+			self.statWindowStartTime = time.time()
+			self.statWindowBytes = 0
 			# -- KẾT THÚC ĐOẠN KHỞI TẠO --
+
 			threading.Thread(target=self.listenRtp).start()
 			self.sendRtspRequest(self.PLAY)
 	
+
 	def listenRtp(self):		
 		"""Listen for RTP packets and handle fragmentation or TCP byte-stream."""
 		if self.streamType == "TCP":
@@ -144,11 +150,11 @@ class Client:
 
 		# Mảng lưu trữ tích lũy dữ liệu khi bị phân mảnh gói tin
 		receivedBuffer = bytearray()
-		
+
 		while True:
 			try:
 				if self.streamType == "TCP":
-					# --- LÀN TCP: XỬ LÝ GOM MẢNH CHÍNH XÁC ---
+
 					len_bytes = self.rtpSocket.recv(4)
 					if not len_bytes or len(len_bytes) < 4:
 						break
@@ -160,89 +166,103 @@ class Client:
 						if not packet:
 							break
 						data.extend(packet)
-					
+						
 					if data:
 						rtpPacket = RtpPacket()
 						rtpPacket.decode(data)
 						currFrameNbr = rtpPacket.seqNum()
-						# --- BẮT ĐẦU ĐO LƯỜNG ---
-					if self.statFirstSeq == -1:
-						self.statFirstSeq = currFrameNbr
-					self.statLastSeq = currFrameNbr
-					self.statTotalBytes += len(rtpPacket.getPayload())
-					self.statTotalPackets += 1
-					
-					# Tính toán thời gian thực
-					elapsed_time = time.time() - self.statStartTime
-					if elapsed_time > 0:
-						# Data Rate (Bytes/s)
-						data_rate = int(self.statTotalBytes / elapsed_time)
 						
-						# Packet Loss (%) - Dựa trên logic: Kỳ vọng nhận = Cuối - Đầu + 1
-						expected_packets = self.statLastSeq - self.statFirstSeq + 1
-						if expected_packets > 0:
-							loss_rate = 100 * (1 - (self.statTotalPackets / expected_packets))
-							# Chống số âm do TCP truyền nguyên cục
-							loss_rate = max(0, loss_rate)
-						else:
-							loss_rate = 0
+						# -- ĐO LƯỜNG METRICS --
+						if getattr(self, 'statFirstSeq', -1) == -1:
+							self.statFirstSeq = currFrameNbr
+							self.statWindowStartTime = time.time()
+							self.statWindowBytes = 0
+
+						self.statLastSeq = currFrameNbr
+						self.statTotalPackets += 1
+						self.statWindowBytes = getattr(self, 'statWindowBytes', 0) + len(rtpPacket.getPayload())
+
+						current_time = time.time()
+						window_elapsed = current_time - getattr(self, 'statWindowStartTime', current_time)
+
+						if window_elapsed >= 0.5:
+							# 1. Tính tốc độ gốc theo byte/giây
+							data_rate_bytes = self.statWindowBytes / window_elapsed
 							
-						# Cập nhật lên UI
-						stats_text = f"Protocol: {self.streamType} | Data Rate: {data_rate} bytes/s | Packet Loss: {loss_rate:.2f}%"
-						self.statLabel.config(text=stats_text)
-					# --- KẾT THÚC ĐO LƯỜNG ---
+							# 2. Chuyển đổi sang MB/s (Chia cho 1024 * 1024)
+							data_rate_mb = data_rate_bytes / (1024 * 1024)
+							
+							expected_packets = self.statLastSeq - self.statFirstSeq + 1
+							loss_rate = max(0.0, 100 * (1 - (self.statTotalPackets / expected_packets))) if expected_packets > 0 else 0.0
+							
+							# 3. Cập nhật Text: Dùng {data_rate_mb:.2f} để lấy 2 chữ số thập phân
+							stats_text = f"Protocol: {self.streamType} | Data Rate: {data_rate_mb:.2f} mb/s | Packet Loss: {loss_rate:.2f}%"
+							
+							self.master.after(0, lambda t=stats_text: self.statLabel.config(text=t))
+							self.statWindowStartTime = current_time
+							self.statWindowBytes = 0
+						# -- KẾT THÚC METRICS --
+
+						# HIỂN THỊ VIDEO TCP
 						if currFrameNbr > self.frameNbr:
 							self.frameNbr = currFrameNbr
 							self.updateMovie(self.writeFrame(rtpPacket.getPayload()))
+							
 				else:
-					# --- LÀN UDP: GOM MẢNH AN TOÀN ---
+					# LÀN UDP
 					data = self.rtpSocket.recv(20480)
 					if data:
 						rtpPacket = RtpPacket()
 						rtpPacket.decode(data)
 						currFrameNbr = rtpPacket.seqNum()
-						# --- BẮT ĐẦU ĐO LƯỜNG (PHIÊN BẢN AN TOÀN ĐA LUỒNG) ---
-					# Khắc phục lỗi biến chưa kịp khởi tạo bằng getattr
-					if getattr(self, 'statFirstSeq', -1) == -1:
-						self.statFirstSeq = currFrameNbr
-					self.statLastSeq = currFrameNbr
-					self.statTotalBytes += len(rtpPacket.getPayload())
-					self.statTotalPackets += 1
-					
-					elapsed_time = time.time() - getattr(self, 'statStartTime', time.time())
-					# Chỉ cập nhật sau mỗi 0.2 giây để tránh làm quá tải giao diện UI
-					if elapsed_time > 0.2:
-						data_rate = int(self.statTotalBytes / elapsed_time)
 						
-						expected_packets = self.statLastSeq - self.statFirstSeq + 1
-						if expected_packets > 0:
-							loss_rate = max(0.0, 100 * (1 - (self.statTotalPackets / expected_packets)))
-						else:
-							loss_rate = 0.0
+						# -- ĐO LƯỜNG METRICS --
+						if getattr(self, 'statFirstSeq', -1) == -1:
+							self.statFirstSeq = currFrameNbr
+							self.statWindowStartTime = time.time()
+							self.statWindowBytes = 0
+
+						self.statLastSeq = currFrameNbr
+						self.statTotalPackets += 1
+						self.statWindowBytes = getattr(self, 'statWindowBytes', 0) + len(rtpPacket.getPayload())
+
+						current_time = time.time()
+						window_elapsed = current_time - getattr(self, 'statWindowStartTime', current_time)
+
+						if window_elapsed >= 0.5:
+							# 1. Tính tốc độ gốc theo byte/giây
+							data_rate_bytes = self.statWindowBytes / window_elapsed
 							
-						stats_text = f"Protocol: {self.streamType} | Data Rate: {data_rate} bytes/s | Packet Loss: {loss_rate:.2f}%"
-						
-						# THỦ THUẬT QUAN TRỌNG: Dùng lambda và after() để đẩy việc vẽ UI về luồng chính
-						self.master.after(0, lambda t=stats_text: self.statLabel.config(text=t))
-					# --- KẾT THÚC ĐO LƯỜNG ---
-						
-						# Khung hình mới tới -> Dọn sạch rác của khung cũ
-						if currFrameNbr > self.currentAssemblyFrame:
+							# 2. Chuyển đổi sang MB/s (Chia cho 1024 * 1024)
+							data_rate_mb = data_rate_bytes / (1024 * 1024)
+							
+							expected_packets = self.statLastSeq - self.statFirstSeq + 1
+							loss_rate = max(0.0, 100 * (1 - (self.statTotalPackets / expected_packets))) if expected_packets > 0 else 0.0
+							
+							# 3. Cập nhật Text: Dùng {data_rate_mb:.2f} để lấy 2 chữ số thập phân
+							stats_text = f"Protocol: {self.streamType} | Data Rate: {data_rate_mb:.2f} mb/s | Packet Loss: {loss_rate:.2f}%"
+							
+							self.master.after(0, lambda t=stats_text: self.statLabel.config(text=t))
+							self.statWindowStartTime = current_time
+							self.statWindowBytes = 0
+						# -- KẾT THÚC METRICS --
+
+						# GOM MẢNH & HIỂN THỊ VIDEO UDP
+						if currFrameNbr > getattr(self, 'currentAssemblyFrame', -1):
 							self.currentAssemblyFrame = currFrameNbr
 							receivedBuffer = bytearray()
 						
-						# Tích lũy mảnh
-						if currFrameNbr == self.currentAssemblyFrame:
+						if currFrameNbr == getattr(self, 'currentAssemblyFrame', -1):
 							receivedBuffer.extend(rtpPacket.getPayload())
-						
-						# Nếu đủ mảnh (có cờ chốt)
+
+		
 						if rtpPacket.marker() == 1:
 							if currFrameNbr > self.frameNbr:
 								self.frameNbr = currFrameNbr
 								try:
 									self.updateMovie(self.writeFrame(bytes(receivedBuffer)))
 								except Exception:
-									pass # Lỡ có rơi 1 gói thì bỏ qua frame đó, không báo lỗi
+									pass
 							receivedBuffer = bytearray()
 			except:
 				if self.playEvent.is_set(): 
@@ -325,15 +345,32 @@ class Client:
 	def recvRtspReply(self):
 		"""Receive RTSP reply from the server."""
 		while True:
-			reply = self.rtspSocket.recv(1024)
-			
-			if reply: 
-				self.parseRtspReply(reply.decode("utf-8"))
-			
-			# Close the RTSP socket upon requesting Teardown
-			if self.requestSent == self.TEARDOWN:
-				self.rtspSocket.shutdown(socket.SHUT_RDWR)
-				self.rtspSocket.close()
+			try:
+				reply = self.rtspSocket.recv(1024)
+				
+				if reply: 
+					self.parseRtspReply(reply.decode("utf-8"))
+				
+				# Bọc riêng khối Teardown để chống lỗi Errno 57
+				if self.teardownAcked == 1:
+					self.rtpteardown = 1
+					self.playEvent.set()
+					try:
+						self.rtspSocket.shutdown(socket.SHUT_RDWR)
+					except OSError:
+						# Bỏ qua nếu socket đã đóng hoặc lỗi
+						pass
+					finally:
+						self.rtspSocket.close()
+					break
+			except Exception as e:
+				# Bắt mọi lỗi xảy ra trong quá trình nhận dữ liệu
+				print(f"[!] Lỗi kết nối RTSP hoặc Server đã ngắt: {e}")
+				self.playEvent.set()
+				try:
+					self.rtspSocket.close()
+				except:
+					pass
 				break
 	
 	def parseRtspReply(self, data):
