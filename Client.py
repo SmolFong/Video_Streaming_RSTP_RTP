@@ -1,3 +1,4 @@
+import time
 from tkinter import *
 import tkinter.messagebox
 from PIL import Image, ImageTk
@@ -80,6 +81,10 @@ class Client:
 		# Khởi tạo biến lưu cấu hình giao thức truyền dữ liệu media
 		self.streamType = "UDP"
 
+		# Thanh trạng thái Telemetry & Monitoring
+		self.statLabel = Label(self.master, text="Metrics: Waiting for stream...", font=("Helvetica", 12, "italic"))
+		self.statLabel.grid(row=3, column=0, columnspan=4, pady=5)
+
 	def changeResolution(self):
 		if self.resolution.get() == "SD":
 			self.streamType = "UDP"
@@ -112,13 +117,18 @@ class Client:
 	def playMovie(self):
 		"""Play button handler."""
 		if self.state == self.READY:
-			# SỬA LỖI RACE CONDITION: Phải reset event TRƯỚC KHI bật luồng mới
 			self.playEvent = threading.Event()
 			self.playEvent.clear()
 			
-			# Create a new thread to listen for RTP packets
+			# -- BẮT ĐẦU ĐOẠN KHỞI TẠO METRICS --
+			self.statStartTime = time.time()  # Thời điểm bắt đầu stream
+			self.statTotalBytes = 0           # Tổng byte nhận được
+			self.statTotalPackets = 0         # Tổng số gói tin đã nhận
+			self.statFirstSeq = -1            # Số Seq của khung hình đầu tiên
+			self.statLastSeq = 0              # Số Seq của khung hình gần nhất
+			# -- KẾT THÚC ĐOẠN KHỞI TẠO --
+
 			threading.Thread(target=self.listenRtp).start()
-			
 			self.sendRtspRequest(self.PLAY)
 	
 	def listenRtp(self):		
@@ -157,6 +167,32 @@ class Client:
 						rtpPacket = RtpPacket()
 						rtpPacket.decode(data)
 						currFrameNbr = rtpPacket.seqNum()
+						# --- BẮT ĐẦU ĐO LƯỜNG ---
+					if self.statFirstSeq == -1:
+						self.statFirstSeq = currFrameNbr
+					self.statLastSeq = currFrameNbr
+					self.statTotalBytes += len(rtpPacket.getPayload())
+					self.statTotalPackets += 1
+					
+					# Tính toán thời gian thực
+					elapsed_time = time.time() - self.statStartTime
+					if elapsed_time > 0:
+						# Data Rate (Bytes/s)
+						data_rate = int(self.statTotalBytes / elapsed_time)
+						
+						# Packet Loss (%) - Dựa trên logic: Kỳ vọng nhận = Cuối - Đầu + 1
+						expected_packets = self.statLastSeq - self.statFirstSeq + 1
+						if expected_packets > 0:
+							loss_rate = 100 * (1 - (self.statTotalPackets / expected_packets))
+							# Chống số âm do TCP truyền nguyên cục
+							loss_rate = max(0, loss_rate)
+						else:
+							loss_rate = 0
+							
+						# Cập nhật lên UI
+						stats_text = f"Protocol: {self.streamType} | Data Rate: {data_rate} bytes/s | Packet Loss: {loss_rate:.2f}%"
+						self.statLabel.config(text=stats_text)
+					# --- KẾT THÚC ĐO LƯỜNG ---
 						if currFrameNbr > self.frameNbr:
 							self.frameNbr = currFrameNbr
 							self.updateMovie(self.writeFrame(rtpPacket.getPayload()))
